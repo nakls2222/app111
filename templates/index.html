@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- viewport для корректного отображения на мобильных устройствах -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Космический питомец</title>
+    
+    <!-- Подключаем официальный скрипт Telegram Web App SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <style>
+        /* === Сброс отступов и базовые настройки === */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        /* 
+          CSS-переменные для цветовой темы.
+          Значения по умолчанию — светлая тема.
+          JavaScript обновит их согласно настройкам Telegram.
+        */
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #000000;
+            --progress-bg: #e0e0e0;
+            --progress-hunger: #4CAF50;  /* зелёный для сытости */
+            --progress-mood: #FFA726;    /* оранжевый для настроения */
+            --button-color: #2481cc;
+            --button-text: #ffffff;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        /* Контейнер всего приложения */
+        .container {
+            width: 100%;
+            max-width: 350px;
+            text-align: center;
+        }
+        
+        /* Смайлик питомца */
+        .pet-emoji {
+            font-size: 80px;
+            margin: 20px 0;
+            transition: transform 0.3s ease; /* плавная анимация увеличения */
+            display: inline-block;
+        }
+        
+        /* Класс, который будет добавляться при кормлении, чтобы смайлик "подпрыгивал" */
+        .pet-emoji.bounce {
+            transform: scale(1.3);
+        }
+        
+        /* Блок одной шкалы (название + полоска + значение) */
+        .stat {
+            margin: 15px 0;
+            text-align: left;
+        }
+        
+        .stat span:first-child {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        /* Фон прогресс-бара */
+        .progress-bar {
+            background-color: var(--progress-bg);
+            border-radius: 12px;
+            height: 24px;
+            width: 100%;
+            overflow: hidden;
+            margin: 4px 0;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        /* Заполненная часть прогресс-бара */
+        .fill {
+            height: 100%;
+            width: 100%; /* будет меняться через JavaScript */
+            border-radius: 12px;
+            transition: width 0.5s ease; /* плавное изменение ширины */
+        }
+        
+        /* Цвет заполнения для сытости */
+        .hunger-fill {
+            background-color: var(--progress-hunger);
+        }
+        
+        /* Цвет заполнения для настроения */
+        .mood-fill {
+            background-color: var(--progress-mood);
+        }
+        
+        /* Значение числа справа от шкалы */
+        .stat-value {
+            float: right;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        
+        /* Всплывающее сообщение (тост) */
+        #toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 20px;
+            font-size: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none; /* не мешает нажимать на элементы под ним */
+            z-index: 1000;
+        }
+        
+        #toast.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Эмодзи питомца, изначально 🐶 -->
+        <div id="petEmoji" class="pet-emoji">🐶</div>
+        
+        <!-- Шкала сытости -->
+        <div class="stat">
+            <span>🍖 Сытость</span>
+            <div class="progress-bar">
+                <div id="hungerFill" class="fill hunger-fill" style="width: 100%;"></div>
+            </div>
+            <span id="hungerValue" class="stat-value">100</span>
+        </div>
+        
+        <!-- Шкала настроения -->
+        <div class="stat">
+            <span>😊 Настроение</span>
+            <div class="progress-bar">
+                <div id="moodFill" class="fill mood-fill" style="width: 100%;"></div>
+            </div>
+            <span id="moodValue" class="stat-value">100</span>
+        </div>
+    </div>
+    
+    <!-- Блок для всплывающих сообщений (пока скрыт) -->
+    <div id="toast"></div>
+    
+    <script>
+        // === Инициализация Telegram Web App ===
+        // Проверяем, запущено ли приложение внутри Telegram
+        const tg = window.Telegram?.WebApp;
+        
+        // Если мы не в Telegram (например, тестируем в браузере), создаём заглушки,
+        // чтобы код не падал с ошибкой. В реальном Mini App объект tg будет настоящим.
+        if (!tg) {
+            console.warn('Telegram WebApp API недоступен. Используем тестовый режим.');
+            // Создаём простую имитацию MainButton для отладки
+            window.Telegram = {
+                WebApp: {
+                    ready: () => {},
+                    MainButton: {
+                        text: '',
+                        show: () => {},
+                        onClick: (fn) => { this._clickFn = fn; },
+                        // Для теста просто вызываем сохранённую функцию по клику на кнопку ниже
+                    },
+                    themeParams: {
+                        bg_color: '#ffffff',
+                        text_color: '#000000',
+                    },
+                    showAlert: (msg) => alert(msg), // всплывающее окно Telegram
+                }
+            };
+            // Для удобства отладки создаём видимую кнопку "Покормить" внизу страницы
+            const fakeBtn = document.createElement('button');
+            fakeBtn.textContent = 'Покормить 🥩 (тест)';
+            fakeBtn.style.position = 'fixed';
+            fakeBtn.style.bottom = '20px';
+            fakeBtn.style.left = '50%';
+            fakeBtn.style.transform = 'translateX(-50%)';
+            fakeBtn.style.padding = '12px 24px';
+            fakeBtn.style.fontSize = '16px';
+            fakeBtn.style.backgroundColor = '#2481cc';
+            fakeBtn.style.color = 'white';
+            fakeBtn.style.border = 'none';
+            fakeBtn.style.borderRadius = '10px';
+            fakeBtn.onclick = () => {
+                if (window.Telegram.WebApp.MainButton._clickFn) {
+                    window.Telegram.WebApp.MainButton._clickFn();
+                }
+            };
+            document.body.appendChild(fakeBtn);
+        }
+        
+        // Сообщаем Telegram, что приложение готово к показу
+        tg?.ready();
+        
+        // === Переменные состояния питомца ===
+        let hunger = 100;   // сытость (0–100)
+        let mood = 100;     // настроение (0–100)
+        
+        // Флаг, чтобы показывать предупреждение о голоде только один раз, пока не покормят
+        let hungerAlertShown = false;
+        
+        // === Получаем ссылки на HTML-элементы ===
+        const petEmojiEl = document.getElementById('petEmoji');
+        const hungerFillEl = document.getElementById('hungerFill');
+        const moodFillEl = document.getElementById('moodFill');
+        const hungerValueEl = document.getElementById('hungerValue');
+        const moodValueEl = document.getElementById('moodValue');
+        const toastEl = document.getElementById('toast');
+        
+        // === Настройка цветовой темы Telegram ===
+        function applyTheme() {
+            // Если есть объект tg, берём цвета из themeParams
+            const params = tg?.themeParams || {};
+            // Устанавливаем CSS-переменные для фона, текста и кнопок
+            document.documentElement.style.setProperty('--bg-color', params.bg_color || '#ffffff');
+            document.documentElement.style.setProperty('--text-color', params.text_color || '#000000');
+            // Дополнительно можно менять цвет кнопки (MainButton стилизуется самим Telegram)
+        }
+        applyTheme();
+        
+        // === Функция обновления интерфейса (шкалы и эмодзи) ===
+        function updateUI() {
+            // Обновляем ширину заполнения шкалы сытости (в процентах)
+            hungerFillEl.style.width = hunger + '%';
+            // Показываем число
+            hungerValueEl.textContent = hunger;
+            
+            // Аналогично для настроения
+            moodFillEl.style.width = mood + '%';
+            moodValueEl.textContent = mood;
+            
+            // Выбираем смайлик по правилам:
+            // 😄 если сытость > 70 И настроение > 70
+            // 😢 если сытость < 30 ИЛИ настроение < 30
+            // 😐 в остальных случаях
+            if (hunger > 70 && mood > 70) {
+                petEmojiEl.textContent = '😄';
+            } else if (hunger < 30 || mood < 30) {
+                petEmojiEl.textContent = '😢';
+            } else {
+                petEmojiEl.textContent = '😐';
+            }
+        }
+        
+        // === Функция показа всплывающего сообщения (тост) ===
+        function showToast(message, duration = 2000) {
+            // Устанавливаем текст
+            toastEl.textContent = message;
+            // Добавляем класс show, чтобы сделать видимым
+            toastEl.classList.add('show');
+            
+            // Через заданное время убираем сообщение
+            setTimeout(() => {
+                toastEl.classList.remove('show');
+            }, duration);
+        }
+        
+        // === Функция кормления питомца ===
+        function feedPet() {
+            // Увеличиваем сытость на 25, но не выше 100
+            hunger = Math.min(hunger + 25, 100);
+            // Увеличиваем настроение на 10, но не выше 100
+            mood = Math.min(mood + 10, 100);
+            
+            // Сбрасываем флаг предупреждения о голоде, т.к. только что покормили
+            hungerAlertShown = false;
+            
+            // Обновляем внешний вид
+            updateUI();
+            
+            // Запускаем анимацию смайлика: добавляем класс bounce
+            petEmojiEl.classList.add('bounce');
+            // Убираем класс через 1 секунду (возвращаем обычный размер)
+            setTimeout(() => {
+                petEmojiEl.classList.remove('bounce');
+            }, 1000);
+            
+            // Показываем радостное сообщение
+            showToast('Ням-ням! 🍖 Питомец покормлен и радуется!');
+        }
+        
+        // === Настройка главной кнопки Telegram (MainButton) ===
+        if (tg?.MainButton) {
+            // Устанавливаем текст кнопки
+            tg.MainButton.text = 'Покормить 🥩';
+            // Показываем кнопку
+            tg.MainButton.show();
+            // Назначаем обработчик нажатия
+            tg.MainButton.onClick(feedPet);
+        }
+        
+        // === Таймер, ухудшающий показатели каждые 3 секунды ===
+        setInterval(() => {
+            // Уменьшаем сытость на 3, но не ниже 0
+            hunger = Math.max(hunger - 3, 0);
+            // Уменьшаем настроение на 2, но не ниже 0
+            mood = Math.max(mood - 2, 0);
+            
+            // Проверяем критическое состояние сытости
+            if (hunger === 0 && !hungerAlertShown) {
+                // Показываем предупреждение и ставим флаг, чтобы не показывать его снова
+                showToast('О нет! 😢 Питомец совсем голоден! Покорми его скорее!');
+                hungerAlertShown = true;
+            }
+            
+            // Обновляем интерфейс с новыми значениями
+            updateUI();
+        }, 3000); // 3000 миллисекунд = 3 секунды
+        
+        // === Первоначальное обновление UI при загрузке страницы ===
+        updateUI();
+    </script>
+</body>
+</html>
